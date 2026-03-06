@@ -1,5 +1,7 @@
 package com.sodavision.pylonandroid;
 
+import static org.opencv.core.Core.mean;
+
 import android.Manifest;
 import android.content.Context;
 import android.content.Intent;
@@ -44,7 +46,23 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.opencv.android.Utils;
+import org.opencv.core.Mat;
+import org.opencv.core.Scalar;
+import org.opencv.android.OpenCVLoader;
+
 public class MainActivity extends AppCompatActivity implements LogTarget {
+
+
+    static {
+        if (!OpenCVLoader.initDebug()) {
+            // Handle initialization error
+            android.util.Log.e("OpenCV", "Internal OpenCV library not found. Using OpenCV Manager for initialization");
+        } else {
+            android.util.Log.d("OpenCV", "OpenCV library found inside package. Using it!");
+        }
+    }
+
     private static final int        PERMISSION_STORAGE_REQUEST = 0xBAce;
     private static final int        PERMISSION_CAMERA_REQUEST = 0xBAcf;
     private static final String     LOG_TAG ="PylonAndroid";
@@ -100,6 +118,8 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
     //> App / Activity Lifecycle
     //------------------------------------------------------------------------------------------
     //------------------------------------------------------------------------------------------
+
+
 
     /** Activity create function.
      *  Called when the system creates our activity.
@@ -457,7 +477,7 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
     /**
      * Called if the user wants to save a lot of images.
      */
-    public void liveButton_OnClick(View view)
+    public void liveButton_OnClick(View view)  //SEAN I think you'll want to pass this live image capture stuff to open CV
     {
         // Disable the UI ...
         //tryChangeEnableUIState(false);
@@ -924,7 +944,13 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
                     // Execute the sample code.
                     try {
                         // Fetch system time and create filename.
-                        grabImage = m_PylonGrab.grabImage();
+                        grabImage = m_PylonGrab.grabImage();  //SEAN Does this get called? Is this the picture?
+//                        Log(LogLevel.Info, "Is this responsive to light? " + grabImage.getPixel(100,100)); //it is responsive to light.
+                        Mat testMat = new Mat();
+                        Utils.bitmapToMat(grabImage, testMat);
+                        Scalar testAvg = mean(testMat);
+                        Log(LogLevel.Info, "Is this the average? " + testAvg);
+
 
                         // For the thread security, pixel format will be changed here. This is for real-time changing
                         // the most safety way to do it is to build a button for stopping capturing and then changing the pixel format.

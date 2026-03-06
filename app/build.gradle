@@ -38,4 +38,7 @@ dependencies {
     // Specify pylon as dependency.
     implementation project(path: ':pyloncpp_dependencies')
     implementation project(path: ':pylonjava_dependencies')
+
+    //implementation group: 'org.bytedeco', name: 'javacv', version: '1.5.13'
+    implementation 'org.opencv:opencv:4.10.0'
 }

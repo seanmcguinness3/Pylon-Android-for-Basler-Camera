@@ -1,5 +1,11 @@
 package com.sodavision.pylonandroid;
 
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+
 public class ValueConversionTool {
 
     private final static double BOUNDARY_VALUE = 1000;
@@ -145,4 +151,35 @@ public class ValueConversionTool {
             return value;
         }
     }
+
+//    public static float[][] readCsvToArray(String filePath) {    List<float[]> rows = new ArrayList<>();
+//        String line;
+//
+//        try (BufferedReader br = new BufferedReader(new FileReader(filePath))) {
+//            while ((line = br.readLine()) != null) {
+//                String[] stringValues = line.split(",");
+//                float[] floatValues = new float[stringValues.length];
+//
+//                for (int i = 0; i < stringValues.length; i++) {
+//                    try {
+//                        // Trim to remove any accidental whitespace before parsing
+//                        floatValues[i] = Float.parseFloat(stringValues[i].trim());
+//                    } catch (NumberFormatException e) {
+//                        // Handle non-numeric data (like headers) by setting to 0 or skipping
+//                        floatValues[i] = 0.0f;
+//                    }
+//                }
+//                rows.add(floatValues);
+//            }
+//        } catch (IOException e) {
+//            e.printStackTrace();
+//            return null;
+//        }
+//
+//        // Convert the List<float[]> to a 2D float array
+//        return rows.toArray(new float[rows.size()][]);
+//    }
+
+
+
 }

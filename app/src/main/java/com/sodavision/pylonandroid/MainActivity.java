@@ -8,13 +8,13 @@ import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
-import android.net.Uri;
+import android.graphics.BitmapFactory;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.text.method.ScrollingMovementMethod;
 import android.util.Log;
 import android.view.View;
-import android.widget.Adapter;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -40,16 +40,25 @@ import org.genicam.genapi.IFloat;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Stream;
 
 import org.opencv.android.Utils;
+import org.opencv.core.Core;
+import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.opencv.core.Scalar;
 import org.opencv.android.OpenCVLoader;
+import org.opencv.imgcodecs.Imgcodecs;
+import org.opencv.imgproc.Imgproc;
 
 public class MainActivity extends AppCompatActivity implements LogTarget {
 
@@ -57,9 +66,9 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
     static {
         if (!OpenCVLoader.initDebug()) {
             // Handle initialization error
-            android.util.Log.e("OpenCV", "Internal OpenCV library not found. Using OpenCV Manager for initialization");
+            Log.e("OpenCV", "Internal OpenCV library not found. Using OpenCV Manager for initialization");
         } else {
-            android.util.Log.d("OpenCV", "OpenCV library found inside package. Using it!");
+            Log.d("OpenCV", "OpenCV library found inside package. Using it!");
         }
     }
 
@@ -70,7 +79,7 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
     private boolean isStopGrabbingImage = true;
     private String pixelFormatSelectedItemName = null;
 
-    private com.sodavision.pylonandroid.PylonGrab m_PylonGrab = null;
+    private PylonGrab m_PylonGrab = null;
     private String                  m_RootPathPictures = null;
     private AtomicBoolean           m_isCameraValid = new AtomicBoolean(false);
     private AtomicBoolean           m_isStoragePermissionGrant = new AtomicBoolean(false);
@@ -115,6 +124,17 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
     private IBoolean acquisitionFrameRateEnable = null;
     private CheckBox acquisitionFrameRateCheckBox = null;
     private EditText acquisitionFrameRateEditText = null;
+
+    //UV TABLE VARIABLES
+    int imageRows = 2146;
+    int imageCols = 2663;
+    private Mat uRawToSin = new Mat(imageRows, imageCols, CvType.CV_32F);
+    private Mat vRawToSin = new Mat(imageRows, imageCols, CvType.CV_32F);
+    private Mat uSinToTan = new Mat(imageRows, imageCols, CvType.CV_32F);
+    private Mat vSinToTan = new Mat(imageRows, imageCols, CvType.CV_32F);
+    private Mat uTanToSin = new Mat(imageRows, imageCols, CvType.CV_32F);
+    private Mat vTanToSin = new Mat(imageRows, imageCols, CvType.CV_32F);
+
     //> App / Activity Lifecycle
     //------------------------------------------------------------------------------------------
     //------------------------------------------------------------------------------------------
@@ -150,7 +170,11 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
 
         // Prepare the camera, start an additional thread to keep the UI responsive.
         Thread sampleThread = new Thread( new PrepareCameraRunnable());
-        sampleThread.start();
+        //sampleThread.start(); //sean comment this out to allow it to run without the camera.
+        //mostly I'm doing this so that I can try to implement the image processor on the bus
+
+        // RUN OPEN CV IMAGE PROCESSOR TEST
+        testImageProcessor("/storage/emulated/0/Documents/ONRDetector/TestPics");
 
         // Exposure time UI initialization
         exposureTimeTextView = findViewById(R.id.exposureTimeTextView);
@@ -477,7 +501,7 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
     /**
      * Called if the user wants to save a lot of images.
      */
-    public void liveButton_OnClick(View view)  //SEAN I think you'll want to pass this live image capture stuff to open CV
+    public void liveButton_OnClick(View view)
     {
         // Disable the UI ...
         //tryChangeEnableUIState(false);
@@ -572,7 +596,7 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
     {
         m_PylonGrab = null;
 
-        int currentVersion =android.os.Build.VERSION.SDK_INT;
+        int currentVersion = Build.VERSION.SDK_INT;
 
         Intent startMain= new Intent(Intent.ACTION_MAIN);
 
@@ -650,7 +674,7 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
      *  Can be called from non-UI threads and will invoke logging in UI thread.
      **/
     @Override
-    public void Log(LogTarget.LogLevel logLevel, String logText) {
+    public void Log(LogLevel logLevel, String logText) {
 
         // Log to the Android Logcat
         switch(logLevel) {
@@ -714,7 +738,7 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
         }
         
         // Check storage permission (only for older Android versions)
-        if(android.os.Build.VERSION.SDK_INT <= 32) {
+        if(Build.VERSION.SDK_INT <= 32) {
             if(ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED )
             {
                 Log(LogLevel.Info,"Asking for permission to write access EXTERNAL_STORAGE");
@@ -737,6 +761,113 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
         }
     }
 
+    private void testImageProcessor(String folderPath){
+        Log(LogLevel.Info, "Folder path: " + folderPath);
+        Path dir = Paths.get(folderPath);
+        loadUVTables();
+
+        // Use try-with-resources to ensure the stream is closed automatically
+        try (Stream<Path> paths = Files.list(dir)) {
+            paths.filter(Files::isRegularFile) // Filter for regular files only
+                    .forEach(path -> {
+                        // Process each file here
+                        Log(LogLevel.Info, "Processing file: " + path.getFileName());
+                        runImageProcessor(BitmapFactory.decodeFile(path.toString()), path.getFileName());
+                    });
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void runImageProcessor(Bitmap bitmap, Path imageName){
+        //LOAD IMAGE
+        Mat rawMat = new Mat();
+        Utils.bitmapToMat(bitmap, rawMat);
+        Imgproc.cvtColor(rawMat, rawMat, Imgproc.COLOR_RGB2GRAY);
+
+        //REMAP IMAGE TO SIN AND TAN
+        Mat remappedToSin = new Mat();
+        Imgproc.remap(rawMat, remappedToSin, uRawToSin, vRawToSin, Imgproc.INTER_LINEAR);
+        Mat remappedToTan = new Mat();
+        Imgproc.remap(remappedToSin,remappedToTan,uSinToTan,vSinToTan,Imgproc.INTER_LINEAR);
+
+        //PRE PROCESS THE IMAGE
+        Mat binary = new Mat();
+        Imgproc.threshold(remappedToTan, binary, 0, 255, Imgproc.THRESH_BINARY | Imgproc.THRESH_OTSU);
+
+        //RUN THE HOUGH TRANSFORM
+        Mat lines = new Mat();
+        Imgproc.HoughLines(binary, lines, 1, Math.PI/180, 150); // dude said that it returns lines in order of vote count https://stackoverflow.com/questions/11352528/opencv-hough-strongest-lines
+        double maxRho = lines.get(0,0)[0], maxTheta = lines.get(0, 0)[1];
+
+        //GENERATE BINARY IMAGE OF THE LINE
+        //if we stick with this algo then you gotta adapt this to work better for horizontal lines, cause if the lines horizontal then you'll only get like 1 X pixel
+        Mat binaryLine = new Mat(imageRows, imageCols, CvType.CV_8U);
+        for (int y = 0; y < imageRows; y++){
+            int x = (int) ((maxRho - y * Math.sin(maxTheta)) / Math.cos(maxTheta));
+            if (x >= 0 && x < imageCols){
+                binaryLine.put(y, x, 255);
+            }
+        }
+
+        //USE ORIGINAL IMAGE AND REMAP LINE TO SINE PROJECTION
+        Mat remapedLine = new Mat();
+        Imgproc.remap(binaryLine, remapedLine, uTanToSin, vTanToSin, Imgproc.INTER_LINEAR);
+
+        //LOOP THOUGH PITCH TO DETERMINE THE MAX PITCH
+        List<Double> resultList = new ArrayList<>(); double maxResult = 0.0; Mat debugLines = new Mat();
+        for (int pitch = 50; pitch < 250; pitch++){
+
+            //CREATE TRANSLATED IMAGE OF NINE LINES (i used for loops in matlab but since this algo is probably not going to be used I'll do it this new way, only here)
+            Mat nineLineImage = new Mat();
+            remapedLine.copyTo(nineLineImage);
+            Mat translationMatrix = new Mat(2, 3, CvType.CV_32F);
+            Mat transforms = new Mat(8, 2, CvType.CV_32F);
+            float p = (float) pitch;
+            transforms.put(0, 0, -p, -p, 0, -p, p, -p, p, 0, p, p, 0, p, -p, p, -p, 0);
+            for (int i = 0; i < 8; i++){
+                translationMatrix.put(0, 0, 1, 0, transforms.get(i, 0)[0], 0, 1, transforms.get(i, 1)[0]);
+                Mat translatedLine = new Mat();
+                Imgproc.warpAffine(remapedLine, translatedLine, translationMatrix, remapedLine.size());
+                Core.add(nineLineImage, translatedLine, nineLineImage);
+            }
+
+            //MULTIPLY THE TRANSLATED LINES BY THE ORIGINAL REMAPED IMAGE AND STORE THE RESULT
+            Mat multiplicationResult = new Mat();
+            Core.multiply(nineLineImage, remappedToSin, multiplicationResult);
+            Scalar resultScalar = Core.sumElems(multiplicationResult);
+            double result = resultScalar.val[0];
+            resultList.add(result);
+            if (result > maxResult){
+                maxResult = result;
+                nineLineImage.copyTo(debugLines);
+            }
+        }
+
+        //SAVE AN IMAGE (for debugging, maybe could be used on final version when event is triggered)
+        Mat comboImage = new Mat();
+        Core.add(remappedToSin, debugLines, comboImage);
+        String fileSavePath = getExternalFilesDir(null).getAbsolutePath() + "/" + imageName;
+        Imgcodecs.imwrite(fileSavePath, comboImage);
+    }
+
+    private void loadUVTables(){
+        File file = new File(getExternalFilesDir(null), "uRawToSin.txt");
+        uRawToSin.put(0, 0, SaveImageCommand.readCsvToArray(file.getAbsolutePath()));
+        file = new File(getExternalFilesDir(null), "vRawToSin.txt");
+        vRawToSin.put(0, 0, SaveImageCommand.readCsvToArray(file.getAbsolutePath()));
+
+        file = new File(getExternalFilesDir(null), "uSinToTan.txt");
+        uSinToTan.put(0, 0, SaveImageCommand.readCsvToArray(file.getAbsolutePath()));
+        file = new File(getExternalFilesDir(null), "vSinToTan.txt");
+        vSinToTan.put(0, 0, SaveImageCommand.readCsvToArray(file.getAbsolutePath()));
+
+        file = new File(getExternalFilesDir(null), "uTanToSin.txt");
+        uTanToSin.put(0, 0, SaveImageCommand.readCsvToArray(file.getAbsolutePath()));
+        file = new File(getExternalFilesDir(null), "vTanToSin.txt");
+        vTanToSin.put(0, 0, SaveImageCommand.readCsvToArray(file.getAbsolutePath()));
+    }
+
 
     /** Save a Java bitmap to file.
      **/
@@ -744,7 +875,6 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
     {
         // Add file extension, e.g., ".png"
         imagePath += "." + compressFormat.toString().toLowerCase();
-
         //> save the bitmap as compressed image.
         File file = new File(imagePath);
         FileOutputStream outputStream = new FileOutputStream(file);
@@ -752,12 +882,13 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
         outputStream.flush();
         outputStream.close();
 
+
         // send a broadcast to notify album that a new photo is saved
-        // and the album will update, so use can find photo in album
-        Intent intent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
-        Uri uri = Uri.fromFile(file);
-        intent.setData(uri);
-        context.sendBroadcast(intent);
+        // and the album will update, so use can find photo in album //sean commenting this out, I don't think i need
+//        Intent intent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
+//        Uri uri = Uri.fromFile(file);
+//        intent.setData(uri);
+//        context.sendBroadcast(intent);
     }
 
     /** Callback for rights request.
@@ -809,7 +940,7 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
             {
                 //> Create wrapper class for pylon logic.
                 //  The constructor search and open the first camera.
-                m_PylonGrab = new com.sodavision.pylonandroid.PylonGrab(MainActivity.this);
+                m_PylonGrab = new PylonGrab(MainActivity.this);
 
                 // Set some camera default settings.
                 m_PylonGrab.prepareCamera();
@@ -945,12 +1076,10 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
                     try {
                         // Fetch system time and create filename.
                         grabImage = m_PylonGrab.grabImage();  //SEAN Does this get called? Is this the picture?
-//                        Log(LogLevel.Info, "Is this responsive to light? " + grabImage.getPixel(100,100)); //it is responsive to light.
                         Mat testMat = new Mat();
                         Utils.bitmapToMat(grabImage, testMat);
                         Scalar testAvg = mean(testMat);
                         Log(LogLevel.Info, "Is this the average? " + testAvg);
-
 
                         // For the thread security, pixel format will be changed here. This is for real-time changing
                         // the most safety way to do it is to build a button for stopping capturing and then changing the pixel format.
@@ -958,6 +1087,9 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
                             pixelFormatChanging(pixelFormatSelectedItemName);
                             pixelFormatSelectedItemName = null;
                         }
+                        String timeStamp = new SimpleDateFormat("_yyyyMMdd_HHmmss", Locale.ENGLISH).format(Calendar.getInstance().getTime());
+                        String fullFilePath = m_RootPathPictures + File.separator + "PylonImgSingle" + timeStamp;
+                        saveImage(fullFilePath , m_CurrentCompressFormat, grabImage, MainActivity.this);
 
                     } catch (Exception e) {
                         Log(LogLevel.Error, "Exception while handling onClick SaveImage: " + e.getMessage());
@@ -1021,10 +1153,10 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
      */
     class Log2UIRunnable implements Runnable
     {
-        final LogTarget.LogLevel    m_LogLevel;
+        final LogLevel    m_LogLevel;
         final String                m_LogText;
 
-        Log2UIRunnable( LogTarget.LogLevel logLevel, String logText) {
+        Log2UIRunnable( LogLevel logLevel, String logText) {
             m_LogLevel = logLevel;
             m_LogText = logText;
         }

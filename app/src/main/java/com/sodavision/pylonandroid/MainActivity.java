@@ -54,6 +54,7 @@ import java.util.stream.Stream;
 import org.opencv.android.Utils;
 import org.opencv.core.Core;
 import org.opencv.core.CvType;
+import org.opencv.core.Rect;
 import org.opencv.core.Mat;
 import org.opencv.core.Scalar;
 import org.opencv.android.OpenCVLoader;
@@ -168,13 +169,15 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
         fullScreenLinearLayout.setEnabled(false);
         fullScreenLinearLayout.setVisibility(View.INVISIBLE);
 
+        loadUVTables();
+
         // Prepare the camera, start an additional thread to keep the UI responsive.
         Thread sampleThread = new Thread( new PrepareCameraRunnable());
-        //sampleThread.start(); //sean comment this out to allow it to run without the camera.
+        sampleThread.start(); //sean comment this out to allow it to run without the camera.
         //mostly I'm doing this so that I can try to implement the image processor on the bus
 
         // RUN OPEN CV IMAGE PROCESSOR TEST
-        testImageProcessor("/storage/emulated/0/Documents/ONRDetector/TestPics");
+        //testImageProcessor("/storage/emulated/0/Documents/ONRDetector/TestPics");
 
         // Exposure time UI initialization
         exposureTimeTextView = findViewById(R.id.exposureTimeTextView);
@@ -216,6 +219,8 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
         requestRights();
         m_RootPathPictures = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES).toString();
         Log(LogLevel.Info, "Save images to: " + m_RootPathPictures);
+
+
     }
 
 
@@ -772,24 +777,33 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
                     .forEach(path -> {
                         // Process each file here
                         Log(LogLevel.Info, "Processing file: " + path.getFileName());
-                        runImageProcessor(BitmapFactory.decodeFile(path.toString()), path.getFileName());
+                        runImageProcessor(BitmapFactory.decodeFile(path.toString()));
                     });
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
+    private long debugTime(String text, long debugStartTime){
+        long elapsedTime = System.currentTimeMillis() - debugStartTime;
+        Log(LogLevel.Info, text + elapsedTime);
+        return System.currentTimeMillis();
+    }
 
-    private void runImageProcessor(Bitmap bitmap, Path imageName){
+    private void runImageProcessor(Bitmap bitmap) {
+
+        long debugStartTime = System.currentTimeMillis();
         //LOAD IMAGE
         Mat rawMat = new Mat();
         Utils.bitmapToMat(bitmap, rawMat);
         Imgproc.cvtColor(rawMat, rawMat, Imgproc.COLOR_RGB2GRAY);
+        //debugStartTime = debugTime("load time: ", debugStartTime);
 
         //REMAP IMAGE TO SIN AND TAN
         Mat remappedToSin = new Mat();
         Imgproc.remap(rawMat, remappedToSin, uRawToSin, vRawToSin, Imgproc.INTER_LINEAR);
         Mat remappedToTan = new Mat();
-        Imgproc.remap(remappedToSin,remappedToTan,uSinToTan,vSinToTan,Imgproc.INTER_LINEAR);
+        Imgproc.remap(remappedToSin, remappedToTan, uSinToTan, vSinToTan, Imgproc.INTER_LINEAR);
+        //debugStartTime = debugTime("remap time ", debugStartTime);
 
         //PRE PROCESS THE IMAGE
         Mat binary = new Mat();
@@ -797,15 +811,16 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
 
         //RUN THE HOUGH TRANSFORM
         Mat lines = new Mat();
-        Imgproc.HoughLines(binary, lines, 1, Math.PI/180, 150); // dude said that it returns lines in order of vote count https://stackoverflow.com/questions/11352528/opencv-hough-strongest-lines
-        double maxRho = lines.get(0,0)[0], maxTheta = lines.get(0, 0)[1];
+        Imgproc.HoughLines(binary, lines, 1, Math.PI / 180, 150); // dude said that it returns lines in order of vote count https://stackoverflow.com/questions/11352528/opencv-hough-strongest-lines
+        double maxRho = lines.get(0, 0)[0], maxTheta = lines.get(0, 0)[1];
+        //debugStartTime = debugTime("binarize and hough: ", debugStartTime);
 
         //GENERATE BINARY IMAGE OF THE LINE
         //if we stick with this algo then you gotta adapt this to work better for horizontal lines, cause if the lines horizontal then you'll only get like 1 X pixel
         Mat binaryLine = new Mat(imageRows, imageCols, CvType.CV_8U);
-        for (int y = 0; y < imageRows; y++){
+        for (int y = 0; y < imageRows; y++) {
             int x = (int) ((maxRho - y * Math.sin(maxTheta)) / Math.cos(maxTheta));
-            if (x >= 0 && x < imageCols){
+            if (x >= 0 && x < imageCols) {
                 binaryLine.put(y, x, 255);
             }
         }
@@ -813,42 +828,65 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
         //USE ORIGINAL IMAGE AND REMAP LINE TO SINE PROJECTION
         Mat remapedLine = new Mat();
         Imgproc.remap(binaryLine, remapedLine, uTanToSin, vTanToSin, Imgproc.INTER_LINEAR);
+        //debugStartTime = debugTime("generate and remap line: ", debugStartTime);
 
         //LOOP THOUGH PITCH TO DETERMINE THE MAX PITCH
-        List<Double> resultList = new ArrayList<>(); double maxResult = 0.0; Mat debugLines = new Mat();
-        for (int pitch = 50; pitch < 250; pitch++){
+        List<Double> resultList = new ArrayList<>();
+        double maxResult = 0.0;
+        Mat debugLines = new Mat();
+        int maxPitch = 0;
+        Mat nineLineImage = null;
+        for (int pitch = 70; pitch < 180; pitch++) {
 
             //CREATE TRANSLATED IMAGE OF NINE LINES (i used for loops in matlab but since this algo is probably not going to be used I'll do it this new way, only here)
-            Mat nineLineImage = new Mat();
+            nineLineImage = new Mat();
             remapedLine.copyTo(nineLineImage);
-            Mat translationMatrix = new Mat(2, 3, CvType.CV_32F);
-            Mat transforms = new Mat(8, 2, CvType.CV_32F);
-            float p = (float) pitch;
-            transforms.put(0, 0, -p, -p, 0, -p, p, -p, p, 0, p, p, 0, p, -p, p, -p, 0);
-            for (int i = 0; i < 8; i++){
-                translationMatrix.put(0, 0, 1, 0, transforms.get(i, 0)[0], 0, 1, transforms.get(i, 1)[0]);
-                Mat translatedLine = new Mat();
-                Imgproc.warpAffine(remapedLine, translatedLine, translationMatrix, remapedLine.size());
-                Core.add(nineLineImage, translatedLine, nineLineImage);
-            }
-
-            //MULTIPLY THE TRANSLATED LINES BY THE ORIGINAL REMAPED IMAGE AND STORE THE RESULT
+            //create croppedByPitch image
+            Rect croppedByPitchRect = new org.opencv.core.Rect(pitch, pitch, imageCols - 2 * pitch, imageRows - 2 * pitch);
+            Mat croppedByPitch = new Mat(remapedLine, croppedByPitchRect);
+            //create and add translated right
+            Mat translatedLine = new Mat();
+            translatedLine.create(imageRows, imageCols, CvType.CV_8U);
+            Rect roiDestRect = new Rect(2 * pitch, pitch, imageCols - 2 * pitch, imageRows - 2 * pitch);
+            Mat roiDest = translatedLine.submat(roiDestRect); //copies to submat of translated line which modifies the original
+            croppedByPitch.copyTo(roiDest);
+            Core.add(remapedLine, translatedLine, nineLineImage);
+            //create translated left
+            roiDestRect = new Rect(0, pitch, imageCols - 2 * pitch, imageRows - 2 * pitch);
+            roiDest = translatedLine.submat(roiDestRect);
+            croppedByPitch.copyTo(roiDest);
+            Core.add(nineLineImage, translatedLine, nineLineImage);
+            //create and add translated up, set croppedByPitch as the three line image
+            croppedByPitch = new Mat(nineLineImage, croppedByPitchRect);
+            roiDestRect = new Rect(pitch, 0, imageCols - 2 * pitch, imageRows - 2 * pitch);
+            roiDest = translatedLine.submat(roiDestRect);
+            croppedByPitch.copyTo(roiDest);
+            Core.add(nineLineImage, translatedLine, nineLineImage);
+            //create and add translated down
+            roiDestRect = new Rect(pitch, 2 * pitch, imageCols - 2 * pitch, imageRows - 2 * pitch);
+            roiDest = translatedLine.submat(roiDestRect);
+            croppedByPitch.copyTo(roiDest);
+            Core.add(nineLineImage, translatedLine, nineLineImage);
+            //MULTIPLY THE TRANSLATED LINES BY THE ORIGINAL REMAPPED IMAGE AND STORE THE RESULT
             Mat multiplicationResult = new Mat();
             Core.multiply(nineLineImage, remappedToSin, multiplicationResult);
             Scalar resultScalar = Core.sumElems(multiplicationResult);
             double result = resultScalar.val[0];
             resultList.add(result);
-            if (result > maxResult){
+            if (result > maxResult) {
                 maxResult = result;
                 nineLineImage.copyTo(debugLines);
+                maxPitch = pitch;
             }
         }
+        //debugStartTime = debugTime("full loop time: ", debugStartTime);
 
         //SAVE AN IMAGE (for debugging, maybe could be used on final version when event is triggered)
         Mat comboImage = new Mat();
-        Core.add(remappedToSin, debugLines, comboImage);
-        String fileSavePath = getExternalFilesDir(null).getAbsolutePath() + "/" + imageName;
+        Core.add(debugLines, remappedToSin, comboImage);
+        String fileSavePath = getExternalFilesDir(null).getAbsolutePath() + "/" + System.currentTimeMillis() + "combo.png";
         Imgcodecs.imwrite(fileSavePath, comboImage);
+        Log(LogLevel.Info, "Pitch: " + maxPitch);
     }
 
     private void loadUVTables(){
@@ -881,14 +919,6 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
         bitmap.compress(compressFormat,100, outputStream );
         outputStream.flush();
         outputStream.close();
-
-
-        // send a broadcast to notify album that a new photo is saved
-        // and the album will update, so use can find photo in album //sean commenting this out, I don't think i need
-//        Intent intent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
-//        Uri uri = Uri.fromFile(file);
-//        intent.setData(uri);
-//        context.sendBroadcast(intent);
     }
 
     /** Callback for rights request.
@@ -1076,10 +1106,11 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
                     try {
                         // Fetch system time and create filename.
                         grabImage = m_PylonGrab.grabImage();  //SEAN Does this get called? Is this the picture?
-                        Mat testMat = new Mat();
-                        Utils.bitmapToMat(grabImage, testMat);
-                        Scalar testAvg = mean(testMat);
-                        Log(LogLevel.Info, "Is this the average? " + testAvg);
+                        //runImageProcessor(grabImage);
+//                        Mat testMat = new Mat();
+//                        Utils.bitmapToMat(grabImage, testMat);
+//                        Scalar testAvg = mean(testMat);
+//                        Log(LogLevel.Info, "Is this the average? " + testAvg);
 
                         // For the thread security, pixel format will be changed here. This is for real-time changing
                         // the most safety way to do it is to build a button for stopping capturing and then changing the pixel format.
@@ -1089,7 +1120,7 @@ public class MainActivity extends AppCompatActivity implements LogTarget {
                         }
                         String timeStamp = new SimpleDateFormat("_yyyyMMdd_HHmmss", Locale.ENGLISH).format(Calendar.getInstance().getTime());
                         String fullFilePath = m_RootPathPictures + File.separator + "PylonImgSingle" + timeStamp;
-                        saveImage(fullFilePath , m_CurrentCompressFormat, grabImage, MainActivity.this);
+                        //saveImage(fullFilePath , m_CurrentCompressFormat, grabImage, MainActivity.this); //seems like this actually does work if you wanna use it to generate a test set
 
                     } catch (Exception e) {
                         Log(LogLevel.Error, "Exception while handling onClick SaveImage: " + e.getMessage());

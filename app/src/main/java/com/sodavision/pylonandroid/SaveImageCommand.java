@@ -91,42 +91,6 @@ public class SaveImageCommand implements ICommand{
 
         return res;
     }
-
-//    public static float[] readCsvToArray(String filePath) {
-//        String line;
-//        float[] floatValues;
-//        List<float[]> list = new ArrayList<>();
-//        try (BufferedReader br = new BufferedReader(new FileReader(filePath))) {
-//            line = br.readLine();
-//            while (line != null){
-//                String[] stringValues = line.split(",");
-//                floatValues = new float[stringValues.length];
-//
-//                for (int i = 0; i < stringValues.length; i++) {
-//                    try {
-//                        // Trim to remove any accidental whitespace before parsing
-//                        floatValues[i] = Float.parseFloat(stringValues[i].trim());
-//                    } catch (NumberFormatException e) {
-//                        // Handle non-numeric data (like headers) by setting to 0 or skipping
-//                        floatValues[i] = 0.0f;
-//                    }
-//                }
-//                list.add(floatValues);
-//                line = br.readLine();
-//            }
-//
-//
-//        } catch (IOException e) {
-//            e.printStackTrace();
-//            return null;
-//        }
-//
-//
-//        // Convert the List<float[]> to a 2D float array
-//        float[] res = new float[list.size()];
-//        for (int i = 0; i < list.size(); i++) res[i] = list.get(i);
-//        return res;
-//    }
 }
 
 
